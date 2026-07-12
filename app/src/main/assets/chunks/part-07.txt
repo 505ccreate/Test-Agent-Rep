@@ -1,0 +1,162 @@
+.arc(px, py, 5, 0, Math.PI * 2); g.fill();
+      g.fillStyle = hexToRgba(band.color, 0.25);
+      g.beginPath(); g.arc(px, py, 11, 0, Math.PI * 2); g.fill();
+    }
+    requestAnimationFrame(draw);
+  }
+  requestAnimationFrame(draw);
+
+  // ---------- Session clock, saved preferences & app bridge ----------
+  const sessionClock = $('sessionClock');
+  const installBtn = $('installBtn');
+  let sessionStartedAt = 0;
+  let deferredInstallPrompt = null;
+  let wakeLock = null;
+
+  function fmtTime(totalSeconds) {
+    const m = Math.floor(totalSeconds / 60).toString().padStart(2, '0');
+    const s = Math.floor(totalSeconds % 60).toString().padStart(2, '0');
+    return m + ':' + s;
+  }
+
+  setInterval(() => {
+    if (!sessionClock) return;
+    sessionClock.textContent = playing && sessionStartedAt
+      ? fmtTime((Date.now() - sessionStartedAt) / 1000)
+      : '00:00';
+  }, 500);
+
+  async function requestWakeLock() {
+    try {
+      if ('wakeLock' in navigator && !wakeLock) {
+        wakeLock = await navigator.wakeLock.request('screen');
+        wakeLock.addEventListener('release', () => { wakeLock = null; });
+      }
+    } catch (e) {}
+  }
+
+  async function releaseWakeLock() {
+    try { if (wakeLock) await wakeLock.release(); } catch (e) {}
+    wakeLock = null;
+  }
+
+  const originalStart = start;
+  start = function() {
+    originalStart();
+    sessionStartedAt = Date.now();
+    requestWakeLock();
+    savePrefs();
+  };
+
+  const originalStop = stop;
+  stop = function() {
+    originalStop();
+    sessionStartedAt = 0;
+    releaseWakeLock();
+    savePrefs();
+  };
+
+  function savePrefs() {
+    try {
+      localStorage.setItem('wavelengthIV.prefs', JSON.stringify({
+        beat: beatSlider.value,
+        carrier: carrierSlider.value,
+        vol: volSlider.value,
+        mode,
+        bathActive: bath.active,
+        bathSpeed: bathSpeed.value,
+        bathVol: bathVol.value,
+        scapes: Object.fromEntries(Object.entries(scapeState).map(([id, s]) => [id, {
+          active: s.active, vol: s.vol
+        }]))
+      }));
+    } catch (e) {}
+  }
+
+  function loadPrefs() {
+    try {
+      const p = JSON.parse(localStorage.getItem('wavelengthIV.prefs') || '{}');
+      if (p.beat != null) beatSlider.value = p.beat;
+      if (p.carrier != null) carrierSlider.value = p.carrier;
+      if (p.vol != null) volSlider.value = p.vol;
+      if (p.bathSpeed != null) bathSpeed.value = p.bathSpeed;
+      if (p.bathVol != null) bathVol.value = p.bathVol;
+      if (p.mode === 'iso') mode = 'iso';
+      bath.active = !!p.bathActive;
+      if (p.scapes) {
+        Object.entries(p.scapes).forEach(([id, saved]) => {
+          if (scapeState[id]) {
+            scapeState[id].active = !!saved.active;
+            scapeState[id].vol = Number(saved.vol ?? 55);
+          }
+        });
+      }
+    } catch (e) {}
+  }
+
+  loadPrefs();
+
+  // Reconcile controls after restoring preferences.
+  $('modeBinaural').classList.toggle('on', mode === 'binaural');
+  $('modeIso').classList.toggle('on', mode === 'iso');
+  bathToggle.classList.toggle('on', bath.active);
+  bathToggle.textContent = bath.active ? 'on' : 'off';
+  bathSpeedOut.textContent = +bathSpeed.value < 25 ? 'slow' : +bathSpeed.value < 60 ? 'medium' : 'fast';
+  bathVolOut.textContent = bathVol.value + '%';
+  carrierOut.textContent = parseFloat(carrierSlider.value).toFixed(1).replace('.0','') + ' Hz';
+  volOut.textContent = volSlider.value + '%';
+  phoneNote.innerHTML = mode === 'binaural'
+    ? 'stereo <b>headphones required</b>'
+    : 'headphones <b>or speakers</b> (bath needs headphones)';
+  hintText.innerHTML = mode === 'binaural'
+    ? '<b>Binaural:</b> left ear carrier, right ear carrier + frequency. Keep the tone barely audible under the layers.'
+    : '<b>Isochronic:</b> one tone pulsing at the target rate. Speakers OK — but brain bath still needs headphones.';
+
+  // Update soundscape cards and sliders after preference restore.
+  Array.from($('scapes').children).forEach((el, i) => {
+    const def = scapeDefs[i];
+    const saved = scapeState[def.id];
+    el.classList.toggle('on', saved.active);
+    const slider = el.querySelector('input');
+    slider.value = saved.vol;
+  });
+
+  [beatSlider, carrierSlider, volSlider, bathSpeed, bathVol].forEach(el => {
+    el.addEventListener('change', savePrefs);
+  });
+  $('modeBinaural').addEventListener('click', savePrefs);
+  $('modeIso').addEventListener('click', savePrefs);
+  bathToggle.addEventListener('click', savePrefs);
+  $('scapes').addEventListener('change', savePrefs);
+  $('scapes').addEventListener('click', () => setTimeout(savePrefs, 0));
+
+  window.addEventListener('beforeinstallprompt', (event) => {
+    event.preventDefault();
+    deferredInstallPrompt = event;
+    if (installBtn) installBtn.hidden = false;
+  });
+  if (installBtn) {
+    installBtn.addEventListener('click', async () => {
+      if (!deferredInstallPrompt) return;
+      deferredInstallPrompt.prompt();
+      await deferredInstallPrompt.userChoice;
+      deferredInstallPrompt = null;
+      installBtn.hidden = true;
+    });
+  }
+
+  if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
+    window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(() => {}));
+  }
+
+  window.WavelengthApp = {
+    pauseForBackground: () => { if (playing) stop(); },
+    isPlaying: () => playing
+  };
+
+  updateLabels();
+  carrierOut.textContent = parseFloat(carrierSlider.value).toFixed(1).replace('.0','') + ' Hz';
+})();
+  </script>
+</body>
+</html>
