@@ -23,18 +23,15 @@ jobs:
       - name: Restore app interface
         shell: bash
         run: |
+          cat app/src/main/assets/chunks/part-*.txt > app/src/main/assets/index.html
           python3 - <<'PY'
           from pathlib import Path
-          import base64, gzip, re
-
-          source = Path('app/src/main/assets/index.html.gz.b64')
           target = Path('app/src/main/assets/index.html')
-          cleaned = re.sub(rb'[^A-Za-z0-9+/=]', b'', source.read_bytes())
-          cleaned += b'=' * (-len(cleaned) % 4)
-          html = gzip.decompress(base64.b64decode(cleaned, validate=False))
-          if b'Wavelength IV' not in html or b'AudioContext' not in html:
-              raise SystemExit('Recovered interface failed validation')
-          target.write_bytes(html)
+          html = target.read_bytes()
+          if len(html) < 45000:
+              raise SystemExit(f'Interface is too small: {len(html)} bytes')
+          if b'Wavelength IV' not in html or b'AudioContext' not in html or not html.rstrip().endswith(b'</html>'):
+              raise SystemExit('Reassembled interface failed validation')
           print(f'Restored {target} ({len(html)} bytes)')
           PY
 
