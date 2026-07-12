@@ -1,0 +1,19 @@
+{
+  "name": "Wavelength IV — Brain Bath Studio",
+  "short_name": "Wavelength IV",
+  "description": "Offline binaural, isochronic and spatial rain sound studio.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#f7f2ff",
+  "theme_color": "#f7f2ff",
+  "icons": [
+    {
+      "src": "./favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
