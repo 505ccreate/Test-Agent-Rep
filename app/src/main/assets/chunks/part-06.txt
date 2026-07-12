@@ -1,0 +1,143 @@
+ampToValueAtTime(volSlider.value / 280, ctx.currentTime + 0.7);
+  }
+  function stopToneNodes() {
+    const nodes = [oscL, oscR, isoOsc, isoLFO, isoConst].filter(Boolean);
+    setTimeout(() => nodes.forEach(n => { try { n.stop(); } catch(e){} }), 500);
+    oscL = oscR = isoOsc = isoLFO = isoConst = isoGate = null;
+  }
+  function start() {
+    ensureCtx();
+    startTone();
+    scapeDefs.forEach(d => { if (scapeState[d.id].active) startScape(d); });
+    if (bath.active) startBath();
+    playing = true;
+    playBtn.textContent = '■';
+    updateLabels();
+  }
+  function stop() {
+    if (!playing) return;
+    const t = ctx.currentTime;
+    toneGain.gain.cancelScheduledValues(t);
+    toneGain.gain.setValueAtTime(toneGain.gain.value, t);
+    toneGain.gain.linearRampToValueAtTime(0, t + 0.4);
+    stopToneNodes();
+    scapeDefs.forEach(d => stopScape(d.id));
+    stopBath();
+    playing = false;
+    playBtn.textContent = '▶';
+    updateLabels();
+  }
+  function setFrequencies() {
+    if (!playing) return;
+    const c = parseFloat(carrierSlider.value);
+    const b = parseFloat(beatSlider.value);
+    const t = ctx.currentTime;
+    if (mode === 'binaural' && oscL && oscR) {
+      oscL.frequency.setTargetAtTime(c, t, 0.05);
+      oscR.frequency.setTargetAtTime(c + b, t, 0.05);
+    } else if (mode === 'iso' && isoOsc && isoLFO) {
+      isoOsc.frequency.setTargetAtTime(c, t, 0.05);
+      isoLFO.frequency.setTargetAtTime(b, t, 0.05);
+    }
+  }
+
+  // ---------- Mode switch ----------
+  function setMode(m) {
+    if (mode === m) return;
+    mode = m;
+    $('modeBinaural').classList.toggle('on', m === 'binaural');
+    $('modeIso').classList.toggle('on', m === 'iso');
+    if (m === 'binaural') {
+      phoneNote.innerHTML = 'stereo <b>headphones required</b>';
+      hintText.innerHTML = '<b>Binaural:</b> left ear carrier, right ear carrier + frequency. Keep the tone barely audible under the layers.';
+    } else {
+      phoneNote.innerHTML = 'headphones <b>or speakers</b> (bath needs headphones)';
+      hintText.innerHTML = '<b>Isochronic:</b> one tone pulsing at the target rate. Speakers OK — but brain bath still needs headphones.';
+    }
+    if (playing) {
+      const t = ctx.currentTime;
+      toneGain.gain.cancelScheduledValues(t);
+      toneGain.gain.setValueAtTime(toneGain.gain.value, t);
+      toneGain.gain.linearRampToValueAtTime(0, t + 0.25);
+      stopToneNodes();
+      setTimeout(() => { if (playing) startTone(); }, 300);
+    }
+    updateLabels();
+  }
+  $('modeBinaural').addEventListener('click', () => setMode('binaural'));
+  $('modeIso').addEventListener('click', () => setMode('iso'));
+
+  // ---------- UI wiring ----------
+  function updateLabels() {
+    const b = parseFloat(beatSlider.value);
+    const band = currentBand(b);
+    beatOut.textContent = b.toFixed(2).replace(/0$/, '') + ' Hz';
+    beatVal.textContent = b.toFixed(1);
+    stateLabel.textContent = band.name + ' · ' + (mode === 'binaural' ? 'binaural' : 'isochronic') + ' · ' + (playing ? 'playing' : 'stopped');
+    bands.forEach(x => x.el.classList.toggle('active', x === band));
+    setAccent(band.color);
+  }
+  function updateBeat() { updateLabels(); setFrequencies(); }
+
+  beatSlider.addEventListener('input', () => { clearTunes(); updateBeat(); });
+  carrierSlider.addEventListener('input', () => {
+    carrierOut.textContent = parseFloat(carrierSlider.value).toFixed(1).replace('.0','') + ' Hz';
+    $('chip432').classList.toggle('on', carrierSlider.value === '432');
+    $('chip440').classList.toggle('on', carrierSlider.value === '440');
+    setFrequencies();
+  });
+  volSlider.addEventListener('input', () => {
+    volOut.textContent = volSlider.value + '%';
+    if (playing && toneGain) toneGain.gain.setTargetAtTime(volSlider.value / 280, ctx.currentTime, 0.05);
+  });
+  $('chip432').addEventListener('click', () => { carrierSlider.value = 432; carrierSlider.dispatchEvent(new Event('input')); });
+  $('chip440').addEventListener('click', () => { carrierSlider.value = 440; carrierSlider.dispatchEvent(new Event('input')); });
+  playBtn.addEventListener('click', () => { ensureCtx(); playing ? stop() : start(); });
+
+  // ---------- Visualizer ----------
+  const canvas = $('scope');
+  const g = canvas.getContext('2d');
+  const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let t0 = performance.now();
+
+  function draw(now) {
+    const W = canvas.width, H = canvas.height, mid = H / 2;
+    const b = parseFloat(beatSlider.value);
+    const band = currentBand(b);
+    const elapsed = (now - t0) / 1000;
+    const visualRate = Math.min(b, 8);
+    const beatPhase = playing && !reduced ? elapsed * visualRate * 2 * Math.PI : 0;
+
+    g.clearRect(0, 0, W, H);
+    g.strokeStyle = 'rgba(255,255,255,0.05)';
+    g.beginPath(); g.moveTo(0, mid); g.lineTo(W, mid); g.stroke();
+
+    const cycles = 3.2;
+    function wave(offset, alpha, amp) {
+      g.strokeStyle = hexToRgba(band.color, alpha);
+      g.lineWidth = 2;
+      g.beginPath();
+      for (let x = 0; x <= W; x += 3) {
+        const ph = (x / W) * cycles * 2 * Math.PI;
+        const drift = playing && !reduced ? elapsed * 1.5 : 0;
+        const y = mid + Math.sin(ph + drift + offset) * amp;
+        x === 0 ? g.moveTo(x, y) : g.lineTo(x, y);
+      }
+      g.stroke();
+    }
+    if (mode === 'binaural') {
+      const breathe = playing ? (0.55 + 0.45 * Math.abs(Math.cos(beatPhase / 2))) : 0.55;
+      const baseAmp = H * 0.30 * breathe;
+      wave(0, 0.85, baseAmp);
+      wave(0.4 + (playing && !reduced ? Math.sin(beatPhase / 2) * 0.6 : 0.3), 0.35, baseAmp);
+    } else {
+      const gate = playing && !reduced ? (Math.sin(beatPhase) > 0 ? 1 : 0.12) : 0.6;
+      wave(0, 0.85, H * 0.30 * gate);
+    }
+
+    // brain-bath indicator: a small orbiting dot when active & playing
+    if (playing && bath.live) {
+      const px = W * 0.5 + Math.sin(bath.phase * 0.9) * W * 0.42;
+      const py = mid + Math.sin(bath.phase * 0.37) * H * 0.32;
+      g.fillStyle = hexToRgba(band.color, 0.9);
+      g.beginPath(); g.
