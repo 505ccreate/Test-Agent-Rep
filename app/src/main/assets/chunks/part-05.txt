@@ -1,0 +1,151 @@
+el);
+  });
+  function toggleScape(def, el) {
+    const s = scapeState[def.id];
+    s.active = !s.active;
+    el.classList.toggle('on', s.active);
+    if (playing) s.active ? startScape(def) : stopScape(def.id);
+  }
+  function startScape(def) {
+    const s = scapeState[def.id];
+    if (s.live) return;
+    s.live = def.build();
+    applyScapeVol(def.id, true);
+  }
+  function stopScape(id) {
+    const s = scapeState[id];
+    if (!s.live) return;
+    const live = s.live;
+    s.live = null;
+    live.gain.gain.setTargetAtTime(0, ctx.currentTime, 0.15);
+    setTimeout(() => {
+      live.stops.forEach(n => { try { n.stop(); } catch(e){} });
+      if (live.stopExtra) live.stopExtra();
+    }, 600);
+  }
+  function applyScapeVol(id, ramp) {
+    const s = scapeState[id];
+    if (!s.live) return;
+    const target = (s.vol / 100) * 0.28 * s.live.level;
+    s.live.gain.gain.setTargetAtTime(target, ctx.currentTime, ramp ? 0.5 : 0.05);
+  }
+
+  // ---------- Brain bath: heavy rain on an orbiting HRTF panner ----------
+  const bath = { active: false, live: null, panner: null, phase: 0, lastT: 0 };
+  const bathToggle = $('bathToggle');
+  const bathSpeed = $('bathSpeed'), bathVol = $('bathVol');
+  const bathSpeedOut = $('bathSpeedOut'), bathVolOut = $('bathVolOut');
+
+  bathToggle.addEventListener('click', () => {
+    bath.active = !bath.active;
+    bathToggle.classList.toggle('on', bath.active);
+    bathToggle.textContent = bath.active ? 'on' : 'off';
+    if (playing) bath.active ? startBath() : stopBath();
+  });
+  bathSpeed.addEventListener('input', () => {
+    const v = +bathSpeed.value;
+    bathSpeedOut.textContent = v < 25 ? 'slow' : v < 60 ? 'medium' : 'fast';
+  });
+  bathVol.addEventListener('input', () => {
+    bathVolOut.textContent = bathVol.value + '%';
+    if (bath.live) bath.live.gain.gain.setTargetAtTime((+bathVol.value/100) * 0.5, ctx.currentTime, 0.1);
+  });
+
+  function startBath() {
+    if (bath.live) return;
+    const panner = ctx.createPanner();
+    panner.panningModel = 'HRTF';
+    panner.distanceModel = 'inverse';
+    panner.refDistance = 0.5;
+    panner.rolloffFactor = 1.2;
+    panner.connect(master);
+    bath.panner = panner;
+    bath.live = buildRain(panner, true);
+    bath.live.gain.gain.setTargetAtTime((+bathVol.value/100) * 0.5, ctx.currentTime, 0.6);
+    bath.phase = 0;
+    bath.lastT = performance.now();
+    orbit();
+  }
+  function stopBath() {
+    if (!bath.live) return;
+    const live = bath.live, panner = bath.panner;
+    bath.live = null; bath.panner = null;
+    live.gain.gain.setTargetAtTime(0, ctx.currentTime, 0.2);
+    setTimeout(() => {
+      live.stops.forEach(n => { try { n.stop(); } catch(e){} });
+      if (live.stopExtra) live.stopExtra();
+      try { panner.disconnect(); } catch(e){}
+    }, 700);
+  }
+
+  // The orbit path: a continuous journey that
+  //   1) circles ear-to-ear around the head (azimuth sweep),
+  //   2) arcs from the nape, over the crown, to the forehead (elevation sweep),
+  //   3) periodically sinks low behind/below (the "washing down" phase).
+  // Three incommensurate rates so the path never exactly repeats — like a real massage.
+  function orbit() {
+    if (!bath.live || !bath.panner) return;
+    const now = performance.now();
+    const dt = Math.min((now - bath.lastT) / 1000, 0.1);
+    bath.lastT = now;
+    const speed = 0.15 + (+bathSpeed.value / 100) * 0.85; // rad-ish multiplier
+    bath.phase += dt * speed;
+
+    const p = bath.phase;
+    const az = p * 0.9;                       // slow circle around the head
+    const el = Math.sin(p * 0.37) * 1.1;      // nape -> crown -> forehead sweep
+    const sink = Math.max(0, Math.sin(p * 0.13)) * 1.4; // occasional wash downward
+    const r = 1.0;
+
+    const x = r * Math.cos(el) * Math.sin(az);          // left-right
+    const y = r * Math.sin(el) - sink;                  // over crown / down the neck
+    const z = -r * Math.cos(el) * Math.cos(az);         // front-back
+
+    const t = ctx.currentTime;
+    if (bath.panner.positionX) {
+      bath.panner.positionX.setTargetAtTime(x, t, 0.05);
+      bath.panner.positionY.setTargetAtTime(y, t, 0.05);
+      bath.panner.positionZ.setTargetAtTime(z, t, 0.05);
+    } else {
+      bath.panner.setPosition(x, y, z);
+    }
+    requestAnimationFrame(orbit);
+  }
+
+  // ---------- Tone engines ----------
+  function startTone() {
+    toneGain = ctx.createGain();
+    toneGain.gain.value = 0;
+    toneGain.connect(master);
+    const c = parseFloat(carrierSlider.value);
+    const b = parseFloat(beatSlider.value);
+
+    if (mode === 'binaural') {
+      oscL = ctx.createOscillator(); oscR = ctx.createOscillator();
+      oscL.type = 'sine'; oscR.type = 'sine';
+      oscL.frequency.value = c; oscR.frequency.value = c + b;
+      if (ctx.createStereoPanner) {
+        const pL = ctx.createStereoPanner(); pL.pan.value = -1;
+        const pR = ctx.createStereoPanner(); pR.pan.value = 1;
+        oscL.connect(pL); pL.connect(toneGain);
+        oscR.connect(pR); pR.connect(toneGain);
+      } else {
+        const m = ctx.createChannelMerger(2);
+        oscL.connect(m, 0, 0); oscR.connect(m, 0, 1);
+        m.connect(toneGain);
+      }
+      oscL.start(); oscR.start();
+    } else {
+      isoOsc = ctx.createOscillator(); isoOsc.type = 'sine'; isoOsc.frequency.value = c;
+      isoGate = ctx.createGain(); isoGate.gain.value = 0;
+      isoLFO = ctx.createOscillator(); isoLFO.type = 'square'; isoLFO.frequency.value = b;
+      const half = ctx.createGain(); half.gain.value = 0.5;
+      const smooth = ctx.createBiquadFilter(); smooth.type = 'lowpass'; smooth.frequency.value = 260;
+      isoLFO.connect(half); half.connect(smooth); smooth.connect(isoGate.gain);
+      isoConst = ctx.createConstantSource ? ctx.createConstantSource() : null;
+      if (isoConst) { isoConst.offset.value = 0.5; isoConst.connect(isoGate.gain); isoConst.start(); }
+      else isoGate.gain.value = 0.5;
+      isoOsc.connect(isoGate); isoGate.connect(toneGain);
+      isoOsc.start(); isoLFO.start();
+    }
+    toneGain.gain.linearR
