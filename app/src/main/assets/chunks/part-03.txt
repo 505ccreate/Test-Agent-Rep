@@ -1,0 +1,128 @@
+       <div class="ctl">
+              <label>Bath volume <output id="bathVolOut">60%</output></label>
+              <input type="range" id="bathVol" min="0" max="100" value="60">
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <div class="stack">
+        <section class="panel">
+          <h2>Tone controls</h2>
+          <div class="ctl">
+            <label>Entrainment frequency <output id="beatOut">6.0 Hz</output></label>
+            <input type="range" id="beat" min="0.1" max="100" step="0.1" value="6">
+          </div>
+          <div class="ctl">
+            <label>Carrier tone <output id="carrierOut">200 Hz</output></label>
+            <div class="carrier-row">
+              <input type="range" id="carrier" min="60" max="1000" step="0.1" value="200">
+              <button class="chip" id="chip432" type="button">432</button>
+              <button class="chip" id="chip440" type="button">440</button>
+            </div>
+          </div>
+          <div class="ctl">
+            <label>Tone volume <output id="volOut">35%</output></label>
+            <input type="range" id="vol" min="0" max="100" step="1" value="35">
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2>Soundscape layers</h2>
+          <div class="scapes" id="scapes"></div>
+        </section>
+
+        <footer>
+          Typical sessions are 15–30 minutes. Do not use while driving. Keep the tone comfortable and low.
+          This is a relaxation and focus tool, not a substitute for medical care.
+        </footer>
+      </div>
+    </div>
+  </main>
+
+  <section class="play-dock" aria-label="Playback controls">
+    <button id="playBtn" type="button" aria-label="Play or stop">▶</button>
+    <div class="playhint" id="hintText">
+      <b>Binaural:</b> left ear carrier, right ear carrier plus the selected frequency.
+      Keep the tone barely audible beneath your chosen layers.
+    </div>
+    <div class="dock-badge">offline studio</div>
+  </section>
+
+  <script>
+(function(){
+  const bands = [
+    { name: 'Delta', lo: 0.1, hi: 4,   def: 2,  color: '#8f78d8' },
+    { name: 'Theta', lo: 4,   hi: 8,   def: 6,  color: '#e49a6f' },
+    { name: 'Alpha', lo: 8,   hi: 13,  def: 10, color: '#4fb9ad' },
+    { name: 'Beta',  lo: 13,  hi: 30,  def: 18, color: '#679fd9' },
+    { name: 'Gamma', lo: 30,  hi: 100, def: 40, color: '#d86fa6' }
+  ];
+
+  const tuneSci = [
+    { name: 'Memory / cognition', spec: '40.0 Hz gamma — most studied', beat: 40 },
+    { name: 'Focus (SMR)',        spec: '14.0 Hz sensorimotor rhythm',  beat: 14 },
+    { name: 'Attention',          spec: '18.0 Hz mid-beta',             beat: 18 },
+    { name: 'Calm / unwind',      spec: '10.0 Hz alpha',                beat: 10 },
+    { name: 'Deep meditation',    spec: '6.0 Hz theta',                 beat: 6 },
+    { name: 'Sleep onset',        spec: '3.0 Hz low delta drift',       beat: 3 },
+    { name: 'Deep sleep',         spec: '2.0 Hz delta',                 beat: 2 },
+    { name: 'Schumann resonance', spec: '7.83 Hz — Earth cavity freq',  beat: 7.83 }
+  ];
+
+  const tuneTrad = [
+    { name: 'Foundation',        spec: '174.0 Hz — solfeggio',            carrier: 174 },
+    { name: 'Renewal',           spec: '285.0 Hz — solfeggio',            carrier: 285 },
+    { name: 'Root chakra',       spec: '396.0 Hz — liberation tone',      carrier: 396 },
+    { name: 'Sacral chakra',     spec: '417.0 Hz — change tone',          carrier: 417 },
+    { name: 'Solar plexus',      spec: '528.0 Hz — the "miracle" tone',   carrier: 528 },
+    { name: 'Heart chakra',      spec: '639.0 Hz — connection tone',      carrier: 639 },
+    { name: 'Throat chakra',     spec: '741.0 Hz — expression tone',      carrier: 741 },
+    { name: 'Third eye',         spec: '852.0 Hz — intuition tone',       carrier: 852 },
+    { name: 'Crown chakra',      spec: '963.0 Hz — awakening tone',       carrier: 963 }
+  ];
+
+  const $ = id => document.getElementById(id);
+  const beatSlider = $('beat'), carrierSlider = $('carrier'), volSlider = $('vol');
+  const beatOut = $('beatOut'), carrierOut = $('carrierOut'), volOut = $('volOut');
+  const beatVal = $('beatVal'), stateLabel = $('stateLabel'), playBtn = $('playBtn');
+  const hintText = $('hintText'), phoneNote = $('phoneNote');
+
+  let mode = 'binaural';
+
+  bands.forEach(b => {
+    const el = document.createElement('button');
+    el.type = 'button'; el.className = 'band';
+    el.innerHTML = '<div class="name">' + b.name + '</div><div class="range">' + b.lo + '–' + b.hi + ' Hz</div>';
+    el.addEventListener('click', () => { beatSlider.value = b.def; clearTunes(); updateBeat(); });
+    $('bands').appendChild(el);
+    b.el = el;
+  });
+
+  function currentBand(f) {
+    for (const b of bands) if (f >= b.lo && f <= b.hi) return b;
+    return f < 0.1 ? bands[0] : bands[4];
+  }
+  function hexToRgba(hex, a) {
+    const n = parseInt(hex.slice(1), 16);
+    return 'rgba(' + ((n>>16)&255) + ',' + ((n>>8)&255) + ',' + (n&255) + ',' + a + ')';
+  }
+  function setAccent(color) {
+    document.documentElement.style.setProperty('--accent', color);
+    document.documentElement.style.setProperty('--accent-soft', hexToRgba(color, 0.12));
+  }
+
+  const allTunes = [];
+  function buildTunes(list, containerId) {
+    list.forEach(t => {
+      const el = document.createElement('button');
+      el.type = 'button'; el.className = 'tune';
+      el.innerHTML = '<div class="tname">' + t.name + '</div><div class="tspec">' + t.spec + '</div>';
+      el.addEventListener('click', () => {
+        clearTunes();
+        el.classList.add('on');
+        if (t.beat != null) beatSlider.value = t.beat;
+        if (t.carrier != null) {
+          carrierSlider.value = t.carrier;
+          carrierSlider.dispatchEvent(new Event('input'));
+    
